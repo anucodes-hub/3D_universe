@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gesture Particles</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; color: white; font-family: sans-serif; }
+        #ui { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(0,0,0,0.5); padding: 15px; border-radius: 10px; }
+        video { display: none; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h2>Gesture Particles</h2>
+        <p>Pinch: Scale | Move: Rotate</p>
+        <select id="shapeSelect">
+            <option value="0">Sphere</option>
+            <option value="1">Heart</option>
+            <option value="2">Saturn</option>
+            <option value="3">Flower</option>
+        </select>
+    </div>
+    <video id="input_video"></video>
+
+    <script id="vertexShader" type="x-shader/x-vertex">
+        varying vec3 vColor;
+        uniform float uTime;
+        uniform float uExpansion;
+        uniform float uShape; // 0: Sphere, 1: Heart, 2: Saturn...
+        attribute float aRandom;
+
+        void main() {
+            vec3 pos = position;
+            
+            // Logic for Morphs (Simplified)
+            if(uShape == 1.0) { // Heart
+                float t = aRandom * 6.28;
+                pos.x = 16.0 * pow(sin(t), 3.0);
+                pos.y = 13.0 * cos(t) - 5.0 * cos(2.0*t) - 2.0 * cos(3.0*t) - cos(4.0*t);
+            }
+
+            vec4 mvPosition = modelViewMatrix * vec4(pos * uExpansion, 1.0);
+            gl_PointSize = 4.0 * (100.0 / -mvPosition.z);
+            gl_Position = projectionMatrix * mvPosition;
+            vColor = vec3(0.5 + 0.5 * sin(uTime), 0.8, 1.0);
+        }
+    </script>
+
+    <script>
+        // --- THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        camera.position.z = 50;
+
+        // Particle System
+        const count = 15000;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const randoms = new Float32Array(count);
+
+        for(let i=0; i<count*3; i++) positions[i] = (Math.random() - 0.5) * 10;
+        for(let i=0; i<count; i++) randoms[i] = Math.random();
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
+
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uExpansion: { value: 1.0 },
+                uShape: { value: 0 }
+            },
+            vertexShader: document.getElementById('vertexShader').textContent,
+            fragmentShader: `varying vec3 vColor; void main() { gl_FragColor = vec4(vColor, 1.0); }`,
+            transparent: true,
+            blending: THREE.AdditiveBlending
+        });
+
+        const points = new THREE.Points(geometry, material);
+        scene.add(points);
+
+        // --- MEDIAPIPE SETUP ---
+        const videoElement = document.getElementById('input_video');
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                // Pinch detection (Thumb tip to Index tip)
+                const dx = landmarks[4].x - landmarks[8].x;
+                const dy = landmarks[4].y - landmarks[8].y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                material.uniforms.uExpansion.value = THREE.MathUtils.lerp(material.uniforms.uExpansion.value, dist * 10, 0.1);
+                points.rotation.y += 0.01;
+            }
+        });
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+        cameraFeed.start();
+
+        // Animation Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            material.uniforms.uTime.value += 0.05;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // UI Listener
+        document.getElementById('shapeSelect').addEventListener('change', (e) => {
+            material.uniforms.uShape.value = parseFloat(e.target.value);
+        });
+    </script>
+</body>
+</html>
